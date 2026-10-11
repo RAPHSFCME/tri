@@ -917,7 +917,8 @@ function sbSyncAll(){
         body:JSON.stringify(uns.map(sbRow))});
       uns.forEach(e=>e.synced=true); save(LS_E,entries);
     }
-    await sbPullCfg();
+    // base neuve sans référentiel : on y envoie celui du téléphone
+    if(!(await sbPullCfg()) && cfg.references.length) await sbPushCfg();
     const p=await sbPull();
     return {sent:uns.length,...p};
   })().finally(()=>{syncing=null;});
@@ -935,6 +936,14 @@ function renderSbAuth(){
   document.getElementById('sbWho').textContent=a?('Connecté : '+(a.email||'')):'';
 }
 (function(){const c=sbCfg();document.getElementById('sbUrl').value=c.url||'';document.getElementById('sbKey').value=c.key||'';renderSbAuth();})();
+/* Nouvelle base (ou 1re connexion) : tout ce qui est sur le téléphone est renvoyé (upsert par id, sans doublon).
+   Sert aussi au déménagement d'un projet Supabase vers un autre. */
+function onProjectChange(){
+  const cur=sbRoot(); if(load('tri_sb_proj','')===cur) return;
+  ['',  '_pf'].forEach(s=>{const a=load('tri_entries'+s,[]);a.forEach(e=>e.synced=false);save('tri_entries'+s,a);save('tri_del'+s,[]);});
+  entries=load(LS_E,[]); pendingDel=[];
+  save('tri_sb_proj',cur);
+}
 document.getElementById('sbLogin').onclick=async()=>{
   const s=document.getElementById('sbStatus');
   save('tri_sb',{url:document.getElementById('sbUrl').value.trim(),key:document.getElementById('sbKey').value.trim()});
@@ -942,6 +951,7 @@ document.getElementById('sbLogin').onclick=async()=>{
     s.textContent='Connexion…';
     const j=await authCall('password',{email:document.getElementById('sbEmail').value.trim(),password:document.getElementById('sbPw').value});
     storeAuth(j); document.getElementById('sbPw').value=''; renderSbAuth();
+    onProjectChange();
     const p=await sbSyncAll(); refreshAll();
     s.textContent=`Connecté. ${p.sent} envoyée(s), ${p.added} reçue(s).`;
   }catch(e){s.textContent='Erreur : '+e.message;}
