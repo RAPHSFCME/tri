@@ -352,6 +352,12 @@ function excelWeekNum(d){return isoWeek(d).week;}
 function titleFrn(f){f=(f||'').toUpperCase();return f==='MOTIC'?'Motic':(f==='KUVAG'?'Kuvag':(f==='ST GEOIRS'?'St Geoirs':f));}
 function localISO(d){d=d||new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);}
 function entryDate(e){return e.dateISO?new Date(e.dateISO+'T12:00:00'):new Date(e.ts);}
+async function rowId(txt){
+  const h=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(txt))).slice(0,16);
+  h[6]=(h[6]&0x0f)|0x50; h[8]=(h[8]&0x3f)|0x80;
+  const x=[...h].map(b=>b.toString(16).padStart(2,'0')).join('');
+  return x.slice(0,8)+'-'+x.slice(8,12)+'-'+x.slice(12,16)+'-'+x.slice(16,20)+'-'+x.slice(20);
+}
 function newId(){return (self.crypto&&crypto.randomUUID)?crypto.randomUUID():'id'+Date.now()+Math.random().toString(16).slice(2);}
 let toastT=null;
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';clearTimeout(toastT);toastT=setTimeout(()=>t.style.display='none',2200);}
@@ -777,13 +783,16 @@ document.getElementById('impXlsx').onclick=()=>document.getElementById('fileIn')
 document.getElementById('fileIn').onchange=(ev)=>{
   const f=ev.target.files[0]; ev.target.value=''; if(!f)return;
   const rd=new FileReader();
-  rd.onload=(e)=>{
+  rd.onload=async(e)=>{
     const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array',cellDates:true});
     const sh=wb.Sheets[flux==='pf'?'PF':'traversée']||wb.Sheets[wb.SheetNames[0]];
     const rows=XLSX.utils.sheet_to_json(sh);
     const pick=(r,keys)=>{for(const k of keys){if(r[k]!=null&&r[k]!=='')return r[k];}return '';};
-    let n=0;
-    rows.forEach(r=>{
+    let n=0, skip=0, i=0; const have=new Set(entries.map(x=>x.id));
+    for(const r of rows){
+      // identifiant tiré du contenu de la ligne : réimporter le même fichier ne crée pas de doublon
+      const id=await rowId(flux+'|'+(i++)+'|'+JSON.stringify(r));
+      if(have.has(id)){skip++;continue;}
       let dd=parseCellDate(pick(r,['Date'])); if(!dd)dd=new Date();
       const ts=Date.now()+n;
       const ref=String(pick(r,['Référence','Reference']));
@@ -798,7 +807,7 @@ document.getElementById('fileIn').onchange=(ev)=>{
         calibre=pick(r,['Type','Calibre']);
         codep=pick(r,['Code pièce']);
       }
-      entries.push({id:newId(),dateISO:localISO(dd),date:dd.toLocaleDateString('fr-FR'),site:cfg.site,
+      entries.push({id,dateISO:localISO(dd),date:dd.toLocaleDateString('fr-FR'),site:cfg.site,
         fournisseur:fourni, reference:ref, calibre:String(calibre),
         defaut:String(pick(r,['Cause','Défaut'])),
         responsabilite:String(pick(r,['Departement','Département','Responsabilité'])),
@@ -806,8 +815,8 @@ document.getElementById('fileIn').onchange=(ev)=>{
         cout:Number(String(pick(r,['Prix','Coût'])).replace(',','.'))||0,
         code_piece:String(codep),lot:String(pick(r,['Lot'])),ts});
       n++;
-    });
-    save(LS_E,entries);renderEntries();alert(n+' ligne(s) importée(s). Elles partiront dans la base à la prochaine synchro.');
+    }
+    save(LS_E,entries);renderEntries();alert(n+' ligne(s) importée(s)'+(skip?', '+skip+' déjà présente(s) ignorée(s)':'')+'.');
     autoSync();
   };
   rd.readAsArrayBuffer(f);
