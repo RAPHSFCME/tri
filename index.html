@@ -8,8 +8,8 @@
 <meta name="apple-mobile-web-app-title" content="Tri">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="icon-180.png">
-<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="scan-180.png">
+<link rel="icon" type="image/png" href="scan-192.png">
 <meta name="robots" content="noindex, nofollow">
 <meta name="theme-color" content="#0f1512">
 <title>Tri traversées</title>
@@ -141,7 +141,7 @@
 <header>
   <div class="wrap">
     <div class="hd">
-      <div class="logo">TT</div>
+      <img class="logo" src="scan-180.png" alt="">
       <div>
         <h1 style="font-size:18px" id="appTitle">Tri traversées</h1>
         <small>Bord de ligne · v3.0</small>
@@ -197,14 +197,24 @@
 <div class="view" id="v-dash">
   <div class="wrap">
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
         <h2 style="font-size:16px">Tableau de bord</h2>
-        <select id="dashScope" style="width:auto">
-          <option value="all" selected>Tout</option>
-          <option value="week">Cette semaine</option>
-          <option value="day">Jour traité</option>
-        </select>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <select id="dashScope" style="width:auto">
+            <option value="all">Tout</option>
+            <option value="week">Cette semaine</option>
+            <option value="lastweek">Semaine dernière</option>
+            <option value="pick">Choisir une semaine…</option>
+            <option value="day">Jour traité</option>
+          </select>
+          <select id="dashWeek" style="width:auto;display:none"></select>
+          <select id="dashMetric" style="width:auto">
+            <option value="q">Pièces</option>
+            <option value="eur">Euros</option>
+          </select>
+        </div>
       </div>
+      <div class="muted" id="dashPeriod" style="margin-top:8px;font-weight:700"></div>
       <div class="kpis" style="margin-top:12px">
         <div class="kpi"><div class="v" id="kPieces">0</div><div class="k">Pièces défaut</div></div>
         <div class="kpi"><div class="v" id="kCout">0 €</div><div class="k">Coût rebut total</div></div>
@@ -696,27 +706,53 @@ document.getElementById('manual').onclick=()=>openSheet({});
 
 /* ============ DASHBOARD ============ */
 let charts={};
+/* Semaine ISO : clé "AAAA-SS", lundi et dimanche */
+function weekKey(d){const w=isoWeek(d);return w.year+'-'+String(w.week).padStart(2,'0');}
+function monday(d){const m=new Date(d.getFullYear(),d.getMonth(),d.getDate(),12);m.setDate(m.getDate()-((m.getDay()+6)%7));return m;}
+function weekLabel(key,d){const lu=monday(d),di=new Date(lu);di.setDate(di.getDate()+6);
+  const f=x=>x.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'});
+  return 'S'+Number(key.slice(5))+' '+key.slice(0,4)+' · du '+f(lu)+' au '+f(di)+'/'+di.getFullYear();}
+function weeksAvailable(){const m={};entries.forEach(e=>{const d=entryDate(e),k=weekKey(d);if(!m[k])m[k]=d;});
+  return Object.keys(m).sort().reverse().map(k=>({key:k,label:weekLabel(k,m[k])}));}
+function fillWeekSelect(){
+  const sel=document.getElementById('dashWeek'), prev=sel.value||load('tri_dash_week','');
+  sel.innerHTML=''; weeksAvailable().forEach(w=>{const o=document.createElement('option');o.value=w.key;o.textContent=w.label;sel.appendChild(o);});
+  if([...sel.options].some(o=>o.value===prev)) sel.value=prev;
+}
+function metric(){return document.getElementById('dashMetric').value;}
+function val(e){return metric()==='eur'?e.quantite*(e.cout||0):e.quantite;}
+function fmt(v){return metric()==='eur'?Math.round(v).toLocaleString('fr-FR')+' €':v;}
+/* Période choisie → {list, label, week} */
 function filterScope(){
   const s=document.getElementById('dashScope').value;
-  if(s==='week'){const r=isoWeek(new Date());return entries.filter(e=>{const w=isoWeek(entryDate(e));return w.week===r.week&&w.year===r.year;});}
-  if(s==='day'){const sd=session.dateISO||localISO();return entries.filter(e=>(e.dateISO||localISO(new Date(e.ts)))===sd);}
-  return entries;
+  document.getElementById('dashWeek').style.display=s==='pick'?'':'none';
+  let key=null, ref=null;
+  if(s==='week'){ref=new Date();key=weekKey(ref);}
+  if(s==='lastweek'){ref=new Date();ref.setDate(ref.getDate()-7);key=weekKey(ref);}
+  if(s==='pick'){fillWeekSelect();key=document.getElementById('dashWeek').value;
+    const e=entries.find(x=>weekKey(entryDate(x))===key); ref=e?entryDate(e):null;}
+  if(key){const list=entries.filter(e=>weekKey(entryDate(e))===key);
+    return {list, week:key, label:ref?weekLabel(key,ref):'Aucune semaine avec des saisies'};}
+  if(s==='day'){const sd=session.dateISO||localISO();
+    return {list:entries.filter(e=>(e.dateISO||localISO(new Date(e.ts)))===sd), label:'Jour du '+new Date(sd+'T12:00:00').toLocaleDateString('fr-FR')};}
+  return {list:entries, label:'Toutes les saisies'};
 }
-function agg(arr,key){const m={};arr.forEach(e=>{const k=e[key]||'?';m[k]=(m[k]||0)+e.quantite;});return m;}
+function agg(arr,key){const m={};arr.forEach(e=>{const k=e[key]||'?';m[k]=(m[k]||0)+val(e);});return m;}
 function timeAgg(gran){
   const m={};
   entries.forEach(e=>{const d=entryDate(e), y=d.getFullYear(); let key,label,sort;
     if(gran==='day'){const iso=localISO(d); key=iso; label=d.toLocaleDateString('fr-FR'); sort=iso;}
     else if(gran==='year'){key=String(y); label=String(y); sort=String(y);}
-    else{const iw=isoWeek(d); key=iw.year+'-'+String(iw.week).padStart(2,'0'); label='S'+iw.week+' '+iw.year; sort=key;}
-    if(!m[key])m[key]={label,sort,q:0}; m[key].q+=e.quantite;
+    else{key=weekKey(d); label='S'+Number(key.slice(5))+' '+key.slice(0,4); sort=key;}
+    if(!m[key])m[key]={key,label,sort,q:0}; m[key].q+=val(e);
   });
   const arr=Object.values(m).sort((a,b)=>a.sort<b.sort?-1:(a.sort>b.sort?1:0));
-  return {labels:arr.map(x=>x.label), data:arr.map(x=>x.q)};
+  return {keys:arr.map(x=>x.key), labels:arr.map(x=>x.label), data:arr.map(x=>Math.round(x.q*100)/100)};
 }
 function renderDash(){
   if(!window.Chart){document.getElementById('v-dash').querySelector('.card').insertAdjacentHTML('beforeend','<p class="muted">Graphiques indisponibles (réseau).</p>');return;}
-  const d=filterScope();
+  const sc=filterScope(), d=sc.list;
+  document.getElementById('dashPeriod').textContent=sc.label+' · '+(flux==='pf'?'Puits fusibles':'Traversées');
   const pieces=d.reduce((s,e)=>s+e.quantite,0);
   const cout=d.reduce((s,e)=>s+e.quantite*(e.cout||0),0);
   const coutF=d.filter(e=>/fourn/i.test(e.responsabilite||'')).reduce((s,e)=>s+e.quantite*(e.cout||0),0);
@@ -733,33 +769,37 @@ function renderDash(){
     document.getElementById('kMotic').textContent=d.filter(e=>e.fournisseur==='MOTIC').reduce((s,e)=>s+e.quantite,0);
   }
   Chart.defaults.color='#8ea095'; Chart.defaults.borderColor='#2a3630'; Chart.defaults.font.family='Inter,sans-serif';
-  const ta=timeAgg(document.getElementById('timeGran').value);
-  drawBar('chWeek', ta.labels, ta.data, '#3DCD58');
+  const gran=document.getElementById('timeGran').value, ta=timeAgg(gran);
+  // semaine choisie mise en évidence
+  drawBar('chWeek', ta.labels, ta.data, ta.keys.map(k=>gran==='week'&&sc.week&&k!==sc.week?'#2e6b3c':'#3DCD58'));
   const def=agg(d,'defaut'); const dk=Object.keys(def).sort((a,b)=>def[b]-def[a]);
-  drawBar('chDef',dk,dk.map(k=>def[k]),'#3DCD58');
+  drawBar('chDef',dk,dk.map(k=>Math.round(def[k]*100)/100),'#3DCD58');
   const rp=agg(d,'responsabilite');
-  drawDoughnut('chResp',Object.keys(rp),Object.values(rp),['#ff5c6c','#c084fc','#3aa0ff']);
+  const rk0=Object.keys(rp);
+  drawDoughnut('chResp',rk0,rk0.map(k=>Math.round(rp[k]*100)/100),rk0.map(k=>/fourn/i.test(k)?'#ff5c6c':(/prod/i.test(k)?'#c084fc':'#3aa0ff')));
   const rf=agg(d,'reference'); const rk=Object.keys(rf).sort((a,b)=>rf[a]-rf[b]);
-  drawBar('chRef',rk,rk.map(k=>rf[k]),'#3aa0ff');
+  drawBar('chRef',rk,rk.map(k=>Math.round(rf[k]*100)/100),'#3aa0ff');
 }
 function drawBar(id,labels,data,color){
   if(charts[id])charts[id].destroy();
   charts[id]=new Chart(document.getElementById(id),{type:'bar',
     data:{labels,datasets:[{data,backgroundColor:color,borderRadius:6}]},
     options:{plugins:{legend:{display:false},
-      datalabels:{anchor:'end',align:'end',color:'#e8efe9',font:{weight:'700',size:11},formatter:v=>v}},
+      datalabels:{anchor:'end',align:'end',color:'#e8efe9',font:{weight:'700',size:11},formatter:v=>fmt(v)}},
       layout:{padding:{top:18}},
-      scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{precision:0}}}}});
+      scales:{x:{grid:{display:false}},y:{beginAtZero:true,ticks:{precision:0,callback:v=>fmt(v)}}}}});
 }
 function drawDoughnut(id,labels,data,colors){
   if(charts[id])charts[id].destroy();
   charts[id]=new Chart(document.getElementById(id),{type:'doughnut',
     data:{labels,datasets:[{data,backgroundColor:colors,borderWidth:0}]},
     options:{plugins:{legend:{position:'bottom'},
-      datalabels:{color:'#fff',font:{weight:'800',size:14},formatter:v=>v}}}});
+      datalabels:{color:'#fff',font:{weight:'800',size:14},formatter:v=>fmt(v)}}}});
 }
-document.getElementById('dashScope').onchange=renderDash;
-document.getElementById('timeGran').onchange=renderDash;
+// choix du tableau de bord mémorisés sur le téléphone
+['dashScope','dashMetric','timeGran','dashWeek'].forEach(id=>{const el=document.getElementById(id), k='tri_'+id;
+  const v=load(k,null); if(v!=null&&id!=='dashWeek'&&[...el.options].some(o=>o.value===v)) el.value=v;
+  el.onchange=()=>{save(k,el.value); if(id==='dashWeek')save('tri_dash_week',el.value); renderDash();};});
 
 /* ============ EXPORT / IMPORT ============ */
 function exportAOA(){
